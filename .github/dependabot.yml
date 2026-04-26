@@ -33,8 +33,9 @@ updates:
       - dependencies
       - github-actions
     cooldown:
+      # github-actions ecosystem does not support semver-classified
+      # cooldown keys; only default-days is honoured here.
       default-days: 5
-      semver-major-days: 14
     groups:
       actions:
         patterns:
