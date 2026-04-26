@@ -2,69 +2,37 @@ name: Build and Release Deb
 
 on:
   push:
-    branches: [master]
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.0.5). Leave blank to build current ref without publishing.'
+        required: false
 
 permissions:
   contents: write
 
 jobs:
-  check-version:
-    name: Check version vs. tags
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-      should_release: ${{ steps.version.outputs.should_release }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Compute version and check for existing tag
-        id: version
-        run: |
-          set -euo pipefail
-          version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
-          if [ -z "${version}" ]; then
-            echo "::error::Could not parse version from Cargo.toml"
-            exit 1
-          fi
-          tag="v${version}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "::notice::workflow_dispatch run; will build but not release."
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if git rev-parse --verify "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "::notice::Tag ${tag} already exists; skipping release."
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::No tag ${tag} yet; will build and release."
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-          fi
-
   build:
     name: Build deb (${{ matrix.target }})
-    needs: check-version
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
             cross: false
           - target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
             cross: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -120,14 +88,11 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Tag and publish release
-    needs: [check-version, build]
-    if: needs.check-version.outputs.should_release == 'true'
+    name: Publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Download deb artifacts
         uses: actions/download-artifact@v4
         with:
@@ -137,24 +102,11 @@ jobs:
       - name: List artifacts
         run: ls -lR artifacts
 
-      - name: Create and push tag
-        env:
-          TAG: ${{ needs.check-version.outputs.tag }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" "${SHA}" -m "Release ${TAG}"
-          git push origin "${TAG}"
-
-      - name: Publish GitHub release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.check-version.outputs.tag }}
-          name: ${{ needs.check-version.outputs.tag }}
-          target_commitish: ${{ github.sha }}
           files: artifacts/*.deb
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          prerelease: ${{ contains(needs.check-version.outputs.tag, '-') }}
