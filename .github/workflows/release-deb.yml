@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -87,6 +89,33 @@ jobs:
           path: ${{ steps.deb.outputs.path }}
           if-no-files-found: error
 
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          file: ${{ steps.deb.outputs.path }}
+          format: cyclonedx-json
+          output-file: ${{ steps.deb.outputs.name }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          file: ${{ steps.deb.outputs.path }}
+          format: spdx-json
+          output-file: ${{ steps.deb.outputs.name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.target }}
+          path: |
+            ${{ steps.deb.outputs.name }}.cdx.json
+            ${{ steps.deb.outputs.name }}.spdx.json
+          if-no-files-found: error
+
   release:
     name: Publish GitHub release
     needs: build
@@ -102,10 +131,37 @@ jobs:
       - name: List artifacts
         run: ls -lR artifacts
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign deb files (keyless via Sigstore)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          for deb in artifacts/*.deb; do
+            cosign sign-blob \
+              --yes \
+              --output-signature "${deb}.sig" \
+              --output-certificate "${deb}.pem" \
+              "${deb}"
+          done
+          ls -l artifacts
+
+      - name: Attest build provenance for deb files
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: 'artifacts/*.deb'
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.deb
+          files: |
+            artifacts/*.deb
+            artifacts/*.deb.sig
+            artifacts/*.deb.pem
+            artifacts/*.cdx.json
+            artifacts/*.spdx.json
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
