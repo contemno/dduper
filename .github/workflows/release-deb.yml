@@ -16,8 +16,56 @@ permissions:
   attestations: write
 
 jobs:
+  check-version:
+    name: Check Cargo.toml version against tag
+    runs-on: ubuntu-latest
+    outputs:
+      mismatch: ${{ steps.check.outputs.mismatch }}
+      tag_version: ${{ steps.check.outputs.tag_version }}
+      cargo_version: ${{ steps.check.outputs.cargo_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Compare Cargo.toml version with tag
+        id: check
+        run: |
+          set -euo pipefail
+          cargo_ver=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+          if [ -z "${cargo_ver}" ]; then
+            echo "::error::Could not parse version from Cargo.toml"
+            exit 1
+          fi
+
+          tag_ver=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            input_tag="${{ github.event.inputs.tag }}"
+            if [ -n "${input_tag}" ]; then
+              tag_ver="${input_tag#v}"
+            fi
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag_ver="${GITHUB_REF_NAME#v}"
+          fi
+
+          echo "cargo_version=${cargo_ver}" >> "$GITHUB_OUTPUT"
+          echo "tag_version=${tag_ver}" >> "$GITHUB_OUTPUT"
+
+          if [ -z "${tag_ver}" ]; then
+            echo "::notice::No tag context (workflow_dispatch without tag input); skipping comparison."
+            echo "mismatch=false" >> "$GITHUB_OUTPUT"
+          elif [ "${cargo_ver}" != "${tag_ver}" ]; then
+            echo "::warning::Cargo.toml version (${cargo_ver}) does not match tag (${tag_ver}). Cargo.toml will be patched in-build, and a follow-up PR will be opened to make the bump permanent."
+            echo "mismatch=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Cargo.toml version (${cargo_ver}) matches tag (${tag_ver})."
+            echo "mismatch=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build deb (${{ matrix.target }})
+    needs: check-version
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -35,6 +83,17 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Patch Cargo.toml to match tag version
+        if: needs.check-version.outputs.mismatch == 'true'
+        env:
+          TAG_VERSION: ${{ needs.check-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${TAG_VERSION}\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+          echo "Patched Cargo.toml to version ${TAG_VERSION}:"
+          grep '^version = ' Cargo.toml
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # branch:stable
@@ -118,7 +177,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    needs: build
+    needs: [check-version, build]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -166,3 +225,43 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  sync-cargo-version:
+    name: Open PR to sync Cargo.toml version with tag
+    needs: [check-version, build, release]
+    if: needs.check-version.outputs.mismatch == 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          ref: master
+
+      - name: Patch Cargo.toml on master
+        env:
+          TAG_VERSION: ${{ needs.check-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${TAG_VERSION}\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+
+      - name: Open follow-up PR
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676  # v7.0.11
+        with:
+          branch: chore/bump-cargo-version-${{ needs.check-version.outputs.tag_version }}
+          base: master
+          title: "chore: bump Cargo.toml version to ${{ needs.check-version.outputs.tag_version }}"
+          commit-message: "chore: bump Cargo.toml version to ${{ needs.check-version.outputs.tag_version }}"
+          body: |
+            ## Why
+
+            `v${{ needs.check-version.outputs.tag_version }}` was just released (see ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}), but `Cargo.toml` on `master` is still pinned at `${{ needs.check-version.outputs.cargo_version }}`. The release workflow patched `Cargo.toml` transiently for the build so the produced `.deb` is named correctly; this PR makes that bump permanent on `master`.
+
+            Auto-opened by `release-deb.yml` after the release published.
+          delete-branch: true
+          labels: |
+            chore
+            automated
