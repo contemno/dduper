@@ -201,8 +201,7 @@ jobs:
           for deb in artifacts/*.deb; do
             cosign sign-blob \
               --yes \
-              --output-signature "${deb}.sig" \
-              --output-certificate "${deb}.pem" \
+              --bundle "${deb}.bundle" \
               "${deb}"
           done
           ls -l artifacts
@@ -217,8 +216,7 @@ jobs:
         with:
           files: |
             artifacts/*.deb
-            artifacts/*.deb.sig
-            artifacts/*.deb.pem
+            artifacts/*.deb.bundle
             artifacts/*.cdx.json
             artifacts/*.spdx.json
           draft: false
