@@ -26,7 +26,8 @@
 │         │                      ▼                       ▼                 │
 │         │             ┌──────────────────┐   ┌─────────────────┐        │
 │         │             │  Argument Parser │   │ Hash Processor  │        │
-│         │             │  & Validator     │   │  (SHA256+numpy) │        │
+│         │             │  & Validator     │   │  (SHA256 +      │        │
+│         │             │                  │   │   HashSet ops)  │        │
 │         │             └──────────────────┘   └─────────────────┘        │
 │         │                      │                       │                 │
 │         │                      ▼                       ▼                 │
@@ -689,20 +690,20 @@ Result:
 │         │                │  │  └──────┬─────────────┘  │
 │         ▼                │  │         │                │
 │  ┌────────────────────┐  │  │         ▼                │
-│  │ pip3 install       │  │  │  ┌────────────────────┐  │
-│  │ requirements.txt   │  │  │  │ Container includes:│  │
-│  │ - numpy            │  │  │  │ - dduper script    │  │
-│  │ - PTable           │  │  │  │ - btrfs.static     │  │
-│  └──────┬─────────────┘  │  │  │ - Dependencies     │  │
+│  │ cargo build        │  │  │  ┌────────────────────┐  │
+│  │ --release          │  │  │  │ Container includes:│  │
+│  │ (Rust 1.70+)       │  │  │  │ - dduper binary    │  │
+│  │                    │  │  │  │ - btrfs.static     │  │
+│  └──────┬─────────────┘  │  │  │ - patched btrfs    │  │
 │         │                │  │  └──────┬─────────────┘  │
 │         ▼                │  │         │                │
 │  ┌────────────────────┐  │  │         ▼                │
 │  │ Copy binaries:     │  │  │  ┌────────────────────┐  │
 │  │ - btrfs.static →   │  │  │  │ Run with device    │  │
 │  │   /usr/sbin/       │  │  │  │ and volume mounts: │  │
-│  │ - dduper →         │  │  │  │                    │  │
-│  │   /usr/sbin/       │  │  │  │ docker run -it \   │  │
-│  └──────┬─────────────┘  │  │  │  --device /dev/... │  │
+│  │ - target/release/  │  │  │  │                    │  │
+│  │   dduper →         │  │  │  │ docker run -it \   │  │
+│  │   /usr/sbin/dduper │  │  │  │  --device /dev/... │  │
 │         │                │  │  │  -v /mnt:/mnt \    │  │
 │         ▼                │  │  │  laks/dduper ...   │  │
 │  ┌────────────────────┐  │  │  └────────────────────┘  │
@@ -745,10 +746,10 @@ Result:
 │         │                                         │
 │         ▼                                         │
 │  ┌────────────────────┐                          │
-│  │ 5. Install dduper  │                          │
-│  │    pip install -r  │                          │
-│  │    requirements    │                          │
-│  │    cp dduper ...   │                          │
+│  │ 5. Build dduper    │                          │
+│  │    cargo build     │                          │
+│  │    --release       │                          │
+│  │    cp target/...   │                          │
 │  └──────┬─────────────┘                          │
 │         │                                         │
 │         ▼                                         │
@@ -770,14 +771,14 @@ Result:
 │  │                                                         │ │
 │  │  ┌──────────────┐         ┌─────────────────┐          │ │
 │  │  │ dduper       │◀───────▶│ dduper.db       │          │ │
-│  │  │ (Python 3)   │         │ (SQLite)        │          │ │
+│  │  │ (Rust)       │         │ (SQLite)        │          │ │
 │  │  │              │         │ - filehash      │          │ │
 │  │  │ - Main logic │         │ - btrfscsum     │          │ │
 │  │  │ - ioctl calls│         └─────────────────┘          │ │
 │  │  │ - Hash calc  │                                      │ │
 │  │  └───┬──────────┘                                      │ │
 │  │      │                                                  │ │
-│  │      │ subprocess.Popen()                              │ │
+│  │      │ std::process::Command                           │ │
 │  │      │                                                  │ │
 │  │      ▼                                                  │ │
 │  │  ┌──────────────────────────┐                          │ │
@@ -892,8 +893,8 @@ This architecture document provides a comprehensive view of the dduper system:
 
 5. **Deployment**: Multiple installation methods (pre-built, Docker, source) for different use cases
 
-6. **Performance**: Optimization through checksum caching, numpy operations, and perfect match detection
+6. **Performance**: Optimization through checksum caching, in-memory `HashSet` set operations, and perfect-match detection
 
-7. **Safety**: Built-in validation mechanisms and backup systems to protect data integrity
+7. **Safety**: Built-in validation mechanisms (real SHA256 content comparison after fast-mode dedupe) and backup systems to protect data integrity
 
-The architecture leverages BTRFS native capabilities while providing a user-friendly Python interface for efficient block-level deduplication.
+The architecture leverages BTRFS native capabilities while providing a single statically-built Rust binary for efficient block-level deduplication.

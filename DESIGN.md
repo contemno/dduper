@@ -15,17 +15,17 @@ dduper is a block-level out-of-band BTRFS deduplication tool that significantly 
 ### 1.3 Target Environment
 - **Filesystem**: BTRFS only
 - **Platform**: Linux
-- **Language**: Python 3
-- **Dependencies**: Modified btrfs-progs, numpy, PTable
+- **Language**: Rust (2021 edition, MSRV 1.70)
+- **Dependencies**: Modified btrfs-progs (with `dump-csum`), Rust crates (clap, rusqlite, sha2, comfy-table, walkdir, regex)
 
 ## 2. System Architecture
 
 ### 2.1 High-Level Components
 
 #### 2.1.1 Core Components
-1. **Main Controller (`dduper` script)**
-   - Entry point and orchestration
-   - Command-line argument parsing
+1. **Main Controller (`dduper` binary)**
+   - Entry point and orchestration (`src/main.rs`)
+   - Command-line argument parsing (`src/cli.rs`, clap-derive)
    - Mode selection and execution flow
 
 2. **BTRFS Checksum Interface**
@@ -163,8 +163,8 @@ CREATE TABLE btrfscsum (
 1. Retrieve BTRFS checksums for file
 2. Group checksums into chunks (based on `ele_sz`)
 3. Compute SHA256 hash for each chunk
-4. Store in OrderedDict with offset as key
-5. Compare dictionaries between files using numpy intersection
+4. Store in a `HashMap<String, Vec<usize>>` keyed by hash, valued by chunk offsets
+5. Compare hash sets between files using `HashSet::intersection` / `HashSet::difference`
 
 #### 5.1.3 Perfect Match Optimization
 When files have identical checksums:
@@ -238,10 +238,10 @@ When files have identical checksums:
 - Avoids redundant `btrfs inspect-internal dump-csum` calls
 - Significant speedup for repeated operations
 
-### 7.2 Numpy-Based Comparison
-- Uses numpy arrays for fast set operations
-- `np.intersect1d()` for finding matching chunks
-- `np.setdiff1d()` for finding unique chunks
+### 7.2 In-Memory Set Comparison
+- Uses `HashSet<String>` for fast O(1) chunk-hash lookups
+- `HashSet::intersection` for finding matching chunks
+- `HashSet::difference` for finding unmatched chunks
 
 ### 7.3 Processed Files Tracking
 - Maintains list of processed files
@@ -249,7 +249,7 @@ When files have identical checksums:
 - Marks perfectly matching files to skip in subsequent comparisons
 
 ### 7.4 Combination Optimization
-- Uses `itertools.combinations()` for efficient pairwise generation
+- Uses the `itertools` crate's `combinations()` for efficient pairwise generation
 - Early termination for perfect matches
 
 ## 8. Supported Checksum Types
@@ -271,20 +271,20 @@ When files have identical checksums:
 
 #### 9.1.1 Pre-built Binary
 - Clone repository
-- Install Python dependencies (numpy, PTable)
-- Copy `btrfs.static` and `dduper` to `/usr/sbin/`
+- Build the dduper binary with `cargo build --release` (Rust 1.70+)
+- Copy `bin/btrfs.static` and `target/release/dduper` to `/usr/sbin/`
 
 #### 9.1.2 Docker
-- Use `laks/dduper` image
+- Use `laks/dduper` image (multi-stage build: Rust → btrfs-progs → runtime)
 - Mount device and directory
-- No dependency installation required
+- No host-side dependency installation required
 
 #### 9.1.3 From Source
 - Clone repository
 - Clone btrfs-progs
 - Apply patch for target version
 - Compile and install btrfs-progs
-- Install dduper script
+- `cargo build --release` and install `target/release/dduper`
 
 ### 9.2 Patch Maintenance
 - Patches maintained for multiple btrfs-progs versions
@@ -352,10 +352,13 @@ dduper --device /dev/sda1 --dir /mnt --recurse --perfect-match-only
 ## 12. Testing Strategy
 
 ### 12.1 Test Coverage
-- Basic functionality tests in `tests/test.py`
-- GitLab CI integration (`.gitlab-ci.yml`)
+- Rust unit tests in `src/csum.rs` and `src/db.rs` (run via `cargo test`)
+- End-to-end loopback BTRFS smoke test in `tests/test.sh`
+- GitLab CI integration (`.gitlab-ci.yml`) running multiple csum-type
+  sanity tests and a fast-mode test under QEMU
 - Docker-based testing environment
-- Dataset generation for consistent testing
+- Dataset generation for consistent testing (`tests/test.py`,
+  `ci/gitlab/tests/dataset.py`)
 
 ### 12.2 Verification Script
 - Basic check script available: `tests/verify.sh`

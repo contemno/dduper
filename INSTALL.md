@@ -3,74 +3,101 @@ How to install dduper?
 
 You can install dduper in 3 different ways.
 
-1. Using pre-built binary which requires couple of python packages.
+1. Build from source with Cargo.
 2. Using Docker image.
-3. Using Source code.
+3. Using a pre-built binary.
 
-All three approach is described below.
+Build from Source:
+------------------
+`dduper` relies on BTRFS checksums. To expose these checksums to userspace
+you need to apply an additional patch on btrfs-progs first. This introduces
+a new command to dump csum using `btrfs inspect-internal dump-csum`.
 
-Install pre-built binaries:
----------------------------
+If you are using the latest btrfs-progs you can get the patch from
+`patch/btrfs-progs-v6.11/`. Older versions are available under
+`patch/btrfs-progs-v*` for compatibility.
 
-To Install `dduper` binaries, execute following commands:
+Steps:
 
-```
-        git clone https://github.com/Lakshmipathi/dduper.git && cd dduper
-        pip3 install -r requirements.txt
-        cp -v bin/btrfs.static /usr/sbin/     # this copies required btrfs binary.
-        cp -v dduper /usr/sbin/               # copy dduper script.
-```
+1. Clone the repo:
 
-That's all. Now type `dduper --help` to list options and continue with README.md for usage.
+   ```
+   git clone https://github.com/Lakshmipathi/dduper.git && cd dduper
+   ```
 
-Note: If you want to perform basic check you can use this [script](https://github.com/Lakshmipathi/dduper/blob/master/tests/verify.sh)
+2. Apply the patch and build btrfs-progs:
 
-Install using Docker :
-----------------------
+   ```
+   git clone https://github.com/kdave/btrfs-progs.git
+   cd btrfs-progs
+   patch -p1 < ../patch/btrfs-progs-v6.11/0001-Print-csum-for-a-given-file-on-stdout.patch
+   ./autogen.sh && ./configure --disable-documentation --disable-libudev
+   make && sudo make install
+   cd ..
+   ```
 
-If you are already using docker and don't want to install any dependencies. Then simply pull the `laks/dduper` image and
-pass your device and mount dir like:
+3. Verify `dump-csum` is available:
+
+   ```
+   btrfs inspect-internal dump-csum --help
+   usage: btrfs inspect-internal dump-csum <path/to/file> <device>
+
+       Get csums for the given file.
+   ```
+
+4. Build the dduper binary with cargo (Rust 1.70+):
+
+   ```
+   cargo build --release
+   sudo cp target/release/dduper /usr/sbin/dduper
+   ```
+
+5. Verify the install and continue with README.md for usage:
+
+   ```
+   dduper --help
+   dduper --version
+   ```
+
+Install using Docker:
+---------------------
+
+If you are already using docker and don't want to install any
+dependencies, pull the `laks/dduper` image and pass your device and
+mount dir like:
 
 ```
 $ docker run -it --device /dev/sda1 -v /btrfs_mnt:/mnt laks/dduper dduper --device /dev/sda1 --dir /mnt --analyze
 ```
 
-Make sure to replace `/dev/sda1` with your btrfs device and `/btrfs_mnt` with btrfs mount point.
+Make sure to replace `/dev/sda1` with your btrfs device and `/btrfs_mnt`
+with the btrfs mount point.
 
+Install pre-built binaries:
+---------------------------
 
-Install from Source:
---------------------
-`dduper` relies on BTRFS checksums. To expose these checksums to userspace you need to apply additional patch on btrfs-progs first.
-This introduces a new command to dump csum using `btrfs inspect-internal dump-csum`.
-
-If you are using latest btrfs-progs you can get it from this repo `patch/btrfs-progs-v5.6.1/`.
-
-Steps should be similar to:
-
-1. git clone https://github.com/Lakshmipathi/dduper.git && cd dduper
-2. git clone https://github.com/kdave/btrfs-progs.git && cd btrfs-progs
-3. Apply the patch like `patch -p1 < ../patch/btrfs-progs-v5.9/0001-Print-csum-for-a-given-file-on-stdout.patch`
-4. Now compile and install btrfs-progs.
-5. After successful compilation, you should see following `dump-csum` option.
+The repo ships a statically-linked patched `btrfs.static` under `bin/`
+that exposes the `dump-csum` command. You can pair it with a dduper
+binary built from source on the same Linux flavor:
 
 ```
-	./btrfs inspect-internal dump-csum --help
-	usage: btrfs inspect-internal dump-csum <path/to/file> <device>
-
-	    Get csums for the given file.
-```
-6. Now we have required patch. Go install dduper.
-```
-	cd ~/dduper
-	pip install -r requirements.txt
-	cp -v dduper /usr/sbin/
+        git clone https://github.com/Lakshmipathi/dduper.git && cd dduper
+        cargo build --release
+        sudo cp -v bin/btrfs.static /usr/sbin/
+        sudo cp -v target/release/dduper /usr/sbin/dduper
 ```
 
-7. Type `dduper --help` to list options and continue with README.md for usage.
+After install, type `dduper --help` to list options and continue with
+README.md for usage.
+
+Note: For a basic check you can use this
+[script](https://github.com/Lakshmipathi/dduper/blob/master/tests/verify.sh).
 
 Misc:
 ----
-If you interested in dumping csum data, please check this demo: https://asciinema.org/a/34565
+If you are interested in dumping csum data, please check this demo:
+https://asciinema.org/a/34565
 
-Original mailing-list announcement: https://www.mail-archive.com/linux-btrfs@vger.kernel.org/msg79853.html
+Original mailing-list announcement:
+https://www.mail-archive.com/linux-btrfs@vger.kernel.org/msg79853.html
 Older patch: https://patchwork.kernel.org/patch/10540229

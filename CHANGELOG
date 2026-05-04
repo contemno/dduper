@@ -1,2 +1,13 @@
+Unreleased:
+ - Replaced the legacy Python implementation with a Rust port. The Rust
+   binary is now the canonical dduper at /usr/sbin/dduper.
+ - Removed dependencies on numpy and PTable (now using std HashMap/HashSet
+   and the comfy-table crate).
+ - Post-dedupe validation now performs a real SHA256 content comparison
+   between the destination and its backup, where the previous Python
+   implementation only compared stat info.
+ - --verbose short flag moved from -V to -v; -V/--version is now the
+   standard clap-provided version flag.
+
 v0.04: 18-09-2020
  - Added xxhash64, blake2, sha256 support
