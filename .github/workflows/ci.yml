@@ -3,7 +3,19 @@ name: ci
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'CHANGELOG'
+      - 'COPYING'
+      - '.gitignore'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'CHANGELOG'
+      - 'COPYING'
+      - '.gitignore'
 
 jobs:
   unit-tests:
