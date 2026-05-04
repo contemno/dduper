@@ -22,8 +22,9 @@ then
 	patch -p1 < /dduper/patch/btrfs-progs-v5.12.1/0001-Print-csum-for-a-given-file-on-stdout.patch
 	./autogen.sh && ./configure --disable-documentation --disable-backtrace && make -j`nproc` && make install && touch "${MNT_DIR}/build_pass.txt"
 	echo "=================  Install dduper =========================="
-	cp -v /dduper/dduper /usr/sbin/
+	cp -v /dduper/target/release/dduper /usr/sbin/dduper
 	/usr/sbin/dduper --help
+	/usr/sbin/dduper --version
 	poweroff
 else
     echo "================= Running dduper Tests  ================================="

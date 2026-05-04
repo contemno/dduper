@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
 # Use debian image and setup repos.
-set -x
+set -ex
 
 ci_branch=$1
 
 apt-get update
-apt-get -y install python3-pip git
+apt-get -y install git
 
 # Setup rootfs
 IMG="/repo/qemu-image.img"
@@ -26,11 +26,14 @@ rm -rf $DIR/btrfs-progs
 git clone -b $ci_branch https://github.com/Lakshmipathi/dduper.git $DIR/dduper
 touch "$DIR/dduper/$ci_branch"
 ls -l "$DIR/dduper/"
-git clone https://github.com/kdave/btrfs-progs.git $DIR/btrfs-progs 
+git clone https://github.com/kdave/btrfs-progs.git $DIR/btrfs-progs
 
-pip3 install --target=$DIR/usr/lib/python3/dist-packages/ -r $DIR/dduper/requirements.txt
+# Build the Rust dduper binary on the host (rustup is installed in the CI
+# image). Doing the build out here keeps the QEMU rootfs free of a Rust
+# toolchain and avoids fetching crates from inside the VM.
+( cd "$DIR/dduper" && cargo build --release )
+ls -lh "$DIR/dduper/target/release/dduper"
 
 cd /
 umount $DIR
 rmdir $DIR
-
