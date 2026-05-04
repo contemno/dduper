@@ -2,6 +2,10 @@
 /target/
 Cargo.lock
 
+# dduper runtime artifacts
+dduper.db
+dduper.log
+
 # Python
 .venv/
 *.pyc
