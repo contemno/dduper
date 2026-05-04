@@ -58,6 +58,9 @@ jobs:
     name: Smoke (${{ matrix.csum }} / ${{ matrix.scenario }})
     needs: [unit-tests, build-btrfs-progs]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     strategy:
       fail-fast: false
       matrix:
@@ -83,4 +86,29 @@ jobs:
           dduper --version
           /usr/sbin/btrfs.static inspect-internal dump-csum --help
       - name: Run smoke test
-        run: sudo ./ci/github/run-smoke.sh ${{ matrix.csum }} ${{ matrix.scenario }}
+        run: sudo ./ci/github/run-smoke.sh ${{ matrix.csum }} ${{ matrix.scenario }} 2>&1 | tee /tmp/smoke-output.log
+      - name: Upload smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-output-${{ matrix.csum }}-${{ matrix.scenario }}
+          path: /tmp/smoke-output.log
+          if-no-files-found: warn
+      - name: Post smoke output to PR on failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Smoke failure: \`${{ matrix.csum }}\` / \`${{ matrix.scenario }}\`"
+            echo
+            echo "Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) — job [${{ github.job }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ github.job }})"
+            echo
+            echo "<details><summary>run-smoke.sh output (last 400 lines)</summary>"
+            echo
+            echo '```'
+            tail -400 /tmp/smoke-output.log || echo "(no output captured)"
+            echo '```'
+            echo "</details>"
+          } > /tmp/comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/comment.md --repo "${{ github.repository }}"
