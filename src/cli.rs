@@ -41,7 +41,7 @@ pub struct Opts {
     pub fast_mode: bool,
 
     /// Show log messages
-    #[arg(short = 'V', long = "verbose")]
+    #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 
     /// Find perfect match files only

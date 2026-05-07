@@ -1,10 +1,16 @@
-FROM debian:bullseye-slim AS build
+FROM rust:1-bookworm AS rust-build
+WORKDIR /src
+COPY Cargo.toml ./
+COPY src ./src
+RUN cargo build --release
+
+FROM debian:bullseye-slim AS btrfs-build
 MAINTAINER Lakshmipathi.G
 
 # Install build dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends autoconf automake gcc \
     make pkg-config e2fslibs-dev libblkid-dev zlib1g-dev liblzo2-dev \
-    python3-dev libzstd-dev python3-pip python3-setuptools patch
+    libzstd-dev patch ca-certificates
 
 # Clone btrfs-progs repo
 ADD --checksum=sha256:e6512ff305963bc68f11803fa759fecbead778a3a951aeb4f7f3f76dabb31db4 https://github.com/kdave/btrfs-progs/archive/refs/tags/v6.1.3.tar.gz /btrfs-progs.tar.gz
@@ -31,23 +37,13 @@ RUN make static
 RUN make btrfs.static
 RUN cp btrfs.static /btrfs-progs-build
 
-# Install dduper
+# Final runtime image
 FROM debian:bullseye-slim
-COPY --from=build /lib/x86_64-linux-gnu/liblzo2.so.2 /lib/x86_64-linux-gnu/
-COPY --from=build /btrfs-progs-build /btrfs-progs
-COPY . /dduper
+COPY --from=btrfs-build /lib/x86_64-linux-gnu/liblzo2.so.2 /lib/x86_64-linux-gnu/
+COPY --from=btrfs-build /btrfs-progs-build /btrfs-progs
+COPY --from=rust-build /src/target/release/dduper /usr/sbin/dduper
 
 RUN mv /btrfs-progs/btrfs.static /
 RUN cp -rv /btrfs-progs/usr/local/bin/* /usr/local/bin && cp -rv /btrfs-progs/usr/local/include/* /usr/local/include/ && cp -rv /btrfs-progs/usr/local/lib/* /usr/local/lib
 RUN btrfs inspect-internal dump-csum --help
-
-WORKDIR /dduper
-
-# Install runtime dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends python3-pip python3-setuptools && \
-    pip3 install -r requirements.txt && \
-    apt-get remove -y python3-pip python3-setuptools && \
-    rm -rf /var/lib/apt/lists/* && \
-    cp -v dduper /usr/sbin/ && \
-    dduper --version
+RUN dduper --version

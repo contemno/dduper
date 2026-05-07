@@ -42,7 +42,7 @@ function setup_data {
 		cp -v /tmp/f1 $MNT_DIR/random
  
         else
-        	python  /mnt/ci/gitlab/tests/dataset.py -d $MNT_DIR -l $1 $2
+        	python3  /mnt/ci/gitlab/tests/dataset.py -d $MNT_DIR -l $1 $2
         fi
         sleep 2
         ls -l $MNT_DIR

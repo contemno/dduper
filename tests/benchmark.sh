@@ -1,14 +1,11 @@
 #!/bin/bash
-# Benchmark: dduper (Python vs Rust) vs naive SHA256 approach
-# Shows why fetching BTRFS csum-tree checksums is faster than reading file data
+# Benchmark: dduper vs naive SHA256 approach.
+# Shows why fetching BTRFS csum-tree checksums is faster than reading file data.
 set -e
 
-BTRFS_BIN="/usr/sbin/btrfs.static"
-PYTHON="/home/laks/foss/dduper/.venv/bin/python3"
-DDUPER_RUST="/home/laks/foss/dduper/target/release/dduper"
-DDUPER_PY="/home/laks/foss/dduper/dduper"
-IMG="/home/laks/foss/btrfs_bench.img"
-MNT="/tmp/dduper_bench_mnt"
+DDUPER="${DDUPER:-$(pwd)/target/release/dduper}"
+IMG="${IMG:-/tmp/dduper_bench.img}"
+MNT="${MNT:-/tmp/dduper_bench_mnt}"
 
 # File sizes to test (in MB)
 SIZES="1024 5120 10240 20480 51200 102400"
@@ -17,10 +14,9 @@ echo "================================================================"
 echo "  dduper Benchmark: BTRFS csum-tree vs SHA256 file reading"
 echo "================================================================"
 echo ""
-echo "This benchmark compares three approaches to find duplicate data:"
+echo "This benchmark compares two approaches to find duplicate data:"
 echo "  1. SHA256 (naive): read entire file contents, compute hash"
-echo "  2. dduper Python:  fetch checksums from BTRFS csum-tree"
-echo "  3. dduper Rust:    same approach, compiled Rust binary"
+echo "  2. dduper:         fetch checksums from BTRFS csum-tree"
 echo ""
 
 # Cleanup
@@ -39,12 +35,10 @@ echo "[Setup] Mounted on $LOOP"
 echo ""
 
 # Print header
-printf "%-10s | %-14s | %-14s | %-14s | %-10s\n" \
-    "File Size" "SHA256 (naive)" "dduper Python" "dduper Rust" "Speedup"
-printf "%-10s-+-%-14s-+-%-14s-+-%-14s-+-%-10s\n" \
-    "----------" "--------------" "--------------" "--------------" "----------"
-
-results=""
+printf "%-10s | %-14s | %-14s | %-10s\n" \
+    "File Size" "SHA256 (naive)" "dduper" "Speedup"
+printf "%-10s-+-%-14s-+-%-14s-+-%-10s\n" \
+    "----------" "--------------" "--------------" "----------"
 
 for SIZE_MB in $SIZES; do
     SIZE_LABEL="${SIZE_MB}MB"
@@ -69,38 +63,27 @@ for SIZE_MB in $SIZES; do
     # Drop caches again
     echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
 
-    # Benchmark 2: dduper Python (dry-run)
+    # Benchmark 2: dduper (dry-run)
     cd /tmp
     sudo rm -f dduper.db dduper.log
-    PY_START=$(date +%s%N)
-    sudo "$PYTHON" "$DDUPER_PY" --device "$LOOP" --files "$MNT/bench_src" "$MNT/bench_dst" --dry-run > /dev/null 2>&1
-    PY_END=$(date +%s%N)
-    PY_MS=$(( (PY_END - PY_START) / 1000000 ))
-
-    # Drop caches again
-    echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
-
-    # Benchmark 3: dduper Rust (dry-run)
-    sudo rm -f dduper.db dduper.log
-    RS_START=$(date +%s%N)
-    sudo "$DDUPER_RUST" --device "$LOOP" --files "$MNT/bench_src" "$MNT/bench_dst" --dry-run > /dev/null 2>&1
-    RS_END=$(date +%s%N)
-    RS_MS=$(( (RS_END - RS_START) / 1000000 ))
+    DD_START=$(date +%s%N)
+    sudo "$DDUPER" --device "$LOOP" --files "$MNT/bench_src" "$MNT/bench_dst" --dry-run > /dev/null 2>&1
+    DD_END=$(date +%s%N)
+    DD_MS=$(( (DD_END - DD_START) / 1000000 ))
 
     # Convert to seconds
     SHA_SEC=$(echo "scale=2; $SHA_MS / 1000" | bc 2>/dev/null || echo "N/A")
-    PY_SEC=$(echo "scale=2; $PY_MS / 1000" | bc 2>/dev/null || echo "N/A")
-    RS_SEC=$(echo "scale=2; $RS_MS / 1000" | bc 2>/dev/null || echo "N/A")
+    DD_SEC=$(echo "scale=2; $DD_MS / 1000" | bc 2>/dev/null || echo "N/A")
 
     # Compute speedup
-    if [ "$RS_MS" -gt 0 ]; then
-        SHA_VS_RUST=$(echo "scale=1; $SHA_MS / $RS_MS" | bc 2>/dev/null || echo "N/A")
+    if [ "$DD_MS" -gt 0 ]; then
+        SPEEDUP=$(echo "scale=1; $SHA_MS / $DD_MS" | bc 2>/dev/null || echo "N/A")
     else
-        SHA_VS_RUST="N/A"
+        SPEEDUP="N/A"
     fi
 
-    printf "%-10s | %12ss | %12ss | %12ss | %7sx\n" \
-        "$SIZE_LABEL" "$SHA_SEC" "$PY_SEC" "$RS_SEC" "$SHA_VS_RUST"
+    printf "%-10s | %12ss | %12ss | %7sx\n" \
+        "$SIZE_LABEL" "$SHA_SEC" "$DD_SEC" "$SPEEDUP"
 
     # Cleanup test files for next iteration
     rm -f "$MNT/bench_src" "$MNT/bench_dst"
@@ -108,7 +91,7 @@ for SIZE_MB in $SIZES; do
 done
 
 echo ""
-echo "Speedup = SHA256 time / Rust dduper time"
+echo "Speedup = SHA256 time / dduper time"
 echo ""
 echo "Why dduper is faster:"
 echo "  SHA256 must read every byte of both files from disk."
