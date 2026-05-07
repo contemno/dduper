@@ -1,9 +1,23 @@
 # Rust build artifacts
 /target/
+Cargo.lock
 
 # dduper runtime artifacts
 dduper.db
 dduper.log
+
+# Python
+.venv/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
 
 # Editor files
 .vscode/
