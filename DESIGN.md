@@ -354,11 +354,11 @@ dduper --device /dev/sda1 --dir /mnt --recurse --perfect-match-only
 ### 12.1 Test Coverage
 - Rust unit tests in `src/csum.rs` and `src/db.rs` (run via `cargo test`)
 - End-to-end loopback BTRFS smoke test in `tests/test.sh`
-- GitLab CI integration (`.gitlab-ci.yml`) running multiple csum-type
-  sanity tests and a fast-mode test under QEMU
-- Docker-based testing environment
-- Dataset generation for consistent testing (`tests/test.py`,
-  `ci/gitlab/tests/dataset.py`)
+- GitHub Actions integration (`.github/workflows/ci.yml`) running unit
+  tests, building the patched btrfs-progs, and a 4 × 3 smoke matrix
+  (csum type × scenario) on every push and pull request
+- Benchmark script comparing dduper against naive SHA256 file reading
+  (`tests/benchmark.sh`)
 
 ### 12.2 Verification Script
 - Basic check script available: `tests/verify.sh`

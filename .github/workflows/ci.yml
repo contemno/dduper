@@ -1,0 +1,114 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release --locked
+      - run: cargo build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dduper
+          path: target/release/dduper
+          if-no-files-found: error
+
+  build-btrfs-progs:
+    name: Build patched btrfs-progs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: btrfs-progs/btrfs.static
+          key: btrfs-progs-v6.11-${{ hashFiles('patch/btrfs-progs-v6.11/*.patch') }}
+      - name: Build patched btrfs.static
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              autoconf automake gcc make pkg-config \
+              e2fslibs-dev libblkid-dev zlib1g-dev liblzo2-dev \
+              libzstd-dev patch
+          git clone --depth 1 -b v6.11 https://github.com/kdave/btrfs-progs.git
+          cd btrfs-progs
+          patch -p1 < ../patch/btrfs-progs-v6.11/0001-Print-csum-for-a-given-file-on-stdout.patch
+          ./autogen.sh
+          ./configure --disable-documentation --disable-libudev
+          make -j"$(nproc)" static
+          make btrfs.static
+      - uses: actions/upload-artifact@v4
+        with:
+          name: btrfs-static
+          path: btrfs-progs/btrfs.static
+          if-no-files-found: error
+
+  smoke:
+    name: Smoke (${{ matrix.csum }} / ${{ matrix.scenario }})
+    needs: [unit-tests, build-btrfs-progs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        csum: [crc32, xxhash, blake2, sha256]
+        scenario: [dir, dir-recurse, fast-mode]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dduper
+          path: stage
+      - uses: actions/download-artifact@v4
+        with:
+          name: btrfs-static
+          path: stage
+      - name: Install binaries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends btrfs-progs
+          sudo install -m755 stage/dduper       /usr/sbin/dduper
+          sudo install -m755 stage/btrfs.static /usr/sbin/btrfs.static
+          sudo modprobe btrfs || true
+          dduper --version
+          /usr/sbin/btrfs.static inspect-internal dump-csum --help
+      - name: Run smoke test
+        run: sudo ./ci/github/run-smoke.sh ${{ matrix.csum }} ${{ matrix.scenario }} 2>&1 | tee /tmp/smoke-output.log
+      - name: Upload smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-output-${{ matrix.csum }}-${{ matrix.scenario }}
+          path: /tmp/smoke-output.log
+          if-no-files-found: warn
+      - name: Post smoke output to PR on failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Smoke failure: \`${{ matrix.csum }}\` / \`${{ matrix.scenario }}\`"
+            echo
+            echo "Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) — job [${{ github.job }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ github.job }})"
+            echo
+            echo "<details><summary>run-smoke.sh output (last 400 lines)</summary>"
+            echo
+            echo '```'
+            tail -400 /tmp/smoke-output.log || echo "(no output captured)"
+            echo '```'
+            echo "</details>"
+          } > /tmp/comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/comment.md --repo "${{ github.repository }}"
