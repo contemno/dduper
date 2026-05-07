@@ -15,7 +15,7 @@
 # (e.g. a GitHub Actions hosted runner). dduper and btrfs.static must
 # already be installed under /usr/sbin/.
 
-set -ex -o pipefail
+set -eux -o pipefail
 
 CSUM="${1:?csum type required}"
 SCENARIO="${2:?scenario required}"
@@ -25,45 +25,26 @@ MNT="${MNT:-/tmp/dduper_smoke_mnt}"
 SRC="/tmp/dduper_smoke_src"
 SIZE_MB=512
 
-dump_dduper_log() {
-    if [ -f /tmp/dduper.log ]; then
-        echo "--- dduper.log ---"
-        cat /tmp/dduper.log
-        echo "--- end dduper.log ---"
-    fi
-}
-
 cleanup() {
     set +e
-    if [ -d "$MNT" ]; then
-        umount "$MNT" 2>/dev/null
-    fi
+    umount "$MNT" 2>/dev/null
     rm -f "$IMG" "$SRC"
     rm -rf "$MNT"
     rm -f /tmp/dduper.db /tmp/dduper.log
+    set -e
 }
 trap cleanup EXIT
-
-echo "=== preflight ==="
-uname -a
-grep -E '\bbtrfs\b' /proc/filesystems || echo "btrfs not in /proc/filesystems yet"
-mkfs.btrfs --version || true
-ls -la /usr/sbin/dduper /usr/sbin/btrfs.static
-file /usr/sbin/dduper /usr/sbin/btrfs.static
-dduper --version
-/usr/sbin/btrfs.static inspect-internal dump-csum --help
 
 cleanup
 mkdir -p "$MNT"
 
-echo "=== mkfs.btrfs (csum=$CSUM, ${SIZE_MB}MB image) ==="
 truncate -s ${SIZE_MB}M "$IMG"
 case "$CSUM" in
     crc32)
-        mkfs.btrfs -f "$IMG"
+        mkfs.btrfs -f "$IMG" >/dev/null
         ;;
     xxhash|blake2|sha256)
-        mkfs.btrfs -f --csum "$CSUM" "$IMG"
+        mkfs.btrfs -f --csum "$CSUM" "$IMG" >/dev/null
         ;;
     *)
         echo "Unknown csum type: $CSUM" >&2
@@ -71,92 +52,66 @@ case "$CSUM" in
         ;;
 esac
 
-echo "=== mount ==="
 mount -o loop "$IMG" "$MNT"
 LOOP_DEV=$(findmnt -n -o SOURCE "$MNT")
-echo "Loop device: $LOOP_DEV"
-df -h "$MNT"
-btrfs filesystem df "$MNT"
 
-echo "=== stage data (scenario=$SCENARIO) ==="
+# Generate a 50MB random source file once. Each scenario stages two
+# copies on the BTRFS mount; dedupe should reclaim ~50MB.
 dd if=/dev/urandom of="$SRC" bs=1M count=50 status=none
 
-D1="$MNT/d1"
-D2="$MNT/d2"
-SUB="$MNT/d1/d2/d3"
+stage_two_dirs() {
+    local dir1="$MNT/d1" dir2="$MNT/d2"
+    mkdir -p "$dir1" "$dir2"
+    cp "$SRC" "$dir1/f1"
+    cp "$SRC" "$dir2/f1"
+    sync
+    DUPER_ARGS=(--device "$LOOP_DEV" --dir "$dir1" "$dir2")
+}
 
+stage_recursive_dirs() {
+    local subdir="$MNT/d1/d2/d3"
+    mkdir -p "$subdir"
+    cp "$SRC" "$MNT/f1"
+    cp "$SRC" "$subdir/f1"
+    sync
+    DUPER_ARGS=(--device "$LOOP_DEV" --dir "$MNT" --recurse)
+}
+
+DUPER_FLAGS=()
 case "$SCENARIO" in
-    dir|fast-mode)
-        mkdir -p "$D1" "$D2"
-        cp "$SRC" "$D1/f1"
-        cp "$SRC" "$D2/f1"
+    dir)
+        stage_two_dirs
         ;;
     dir-recurse)
-        mkdir -p "$SUB"
-        cp "$SRC" "$MNT/f1"
-        cp "$SRC" "$SUB/f1"
+        stage_recursive_dirs
+        ;;
+    fast-mode)
+        stage_two_dirs
+        DUPER_FLAGS=(--fast-mode)
         ;;
     *)
         echo "Unknown scenario: $SCENARIO" >&2
         exit 64
         ;;
 esac
-sync
 
-ls -laR "$MNT"
-df -h "$MNT"
-
-before_kb=$(df --output=used "$MNT" | tail -1 | tr -d ' ')
-echo "before (KB): $before_kb"
+before=$(df --output=used -BM "$MNT" | tail -1 | tr -d ' M')
 
 cd /tmp
 rm -f dduper.db dduper.log
-
-echo "=== dduper --dry-run ==="
-case "$SCENARIO" in
-    dir)
-        dduper --device "$LOOP_DEV" --dir "$D1" "$D2" --dry-run
-        ;;
-    dir-recurse)
-        dduper --device "$LOOP_DEV" --dir "$MNT" --recurse --dry-run
-        ;;
-    fast-mode)
-        dduper --fast-mode --device "$LOOP_DEV" --dir "$D1" "$D2" --dry-run
-        ;;
-esac
-dump_dduper_log
-
+dduper "${DUPER_FLAGS[@]}" "${DUPER_ARGS[@]}" --dry-run
 rm -f dduper.db dduper.log
-
-echo "=== dduper (actual dedupe) ==="
-case "$SCENARIO" in
-    dir)
-        dduper --device "$LOOP_DEV" --dir "$D1" "$D2"
-        ;;
-    dir-recurse)
-        dduper --device "$LOOP_DEV" --dir "$MNT" --recurse
-        ;;
-    fast-mode)
-        dduper --fast-mode --device "$LOOP_DEV" --dir "$D1" "$D2"
-        ;;
-esac
-dump_dduper_log
-
+dduper "${DUPER_FLAGS[@]}" "${DUPER_ARGS[@]}"
 sync
 sleep 2
 
-after_kb=$(df --output=used "$MNT" | tail -1 | tr -d ' ')
-echo "after (KB): $after_kb"
+after=$(df --output=used -BM "$MNT" | tail -1 | tr -d ' M')
+deduped=$(( before - after ))
 
-deduped_kb=$(( before_kb - after_kb ))
-deduped_mb=$(( deduped_kb / 1024 ))
-echo "scenario=$SCENARIO csum=$CSUM before=${before_kb}KB after=${after_kb}KB deduped=${deduped_kb}KB (~${deduped_mb}MB)"
+echo "scenario=$SCENARIO csum=$CSUM before=${before}M after=${after}M deduped=${deduped}M"
 
-btrfs filesystem df "$MNT"
-btrfs filesystem usage "$MNT" || true
-
-if [ "$deduped_mb" -lt 45 ]; then
-    echo "FAIL: expected >=45MB reclaimed, got ${deduped_mb}MB" >&2
+if [ "$deduped" -lt 45 ]; then
+    echo "FAIL: expected ~50MB reclaimed, got ${deduped}MB" >&2
     exit 1
 fi
-echo "PASS: scenario=$SCENARIO csum=$CSUM"
+echo "PASS"
