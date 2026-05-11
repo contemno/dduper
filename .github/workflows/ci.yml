@@ -10,14 +10,14 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --release --all-targets -- -D warnings
       - run: cargo test --release --locked
       - run: cargo build --release --locked
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dduper
           path: target/release/dduper
@@ -27,9 +27,9 @@ jobs:
     name: Build patched btrfs-progs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: btrfs-progs/btrfs.static
           key: btrfs-progs-v6.11-${{ hashFiles('patch/btrfs-progs-v6.11/*.patch') }}
@@ -48,7 +48,7 @@ jobs:
           ./configure --disable-documentation --disable-libudev
           make -j"$(nproc)" static
           make btrfs.static
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: btrfs-static
           path: btrfs-progs/btrfs.static
@@ -67,12 +67,12 @@ jobs:
         csum: [crc32, xxhash, blake2, sha256]
         scenario: [dir, dir-recurse, fast-mode]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
         with:
           name: dduper
           path: stage
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: btrfs-static
           path: stage
@@ -89,7 +89,7 @@ jobs:
         run: sudo ./ci/github/run-smoke.sh ${{ matrix.csum }} ${{ matrix.scenario }} 2>&1 | tee /tmp/smoke-output.log
       - name: Upload smoke output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-output-${{ matrix.csum }}-${{ matrix.scenario }}
           path: /tmp/smoke-output.log
